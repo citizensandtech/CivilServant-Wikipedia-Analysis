@@ -36,6 +36,7 @@ vignettes/*.pdf
 rsconnect/
 
 outreach-analysis-summer-2018/snuggle-power-analysis/env/
+
 .Rproj.user
 
 # jupyter checkpoints
