@@ -267,11 +267,12 @@ de.power.df <- read.csv(file.path(data.path, "de_gratitude_power-analysis_datase
 fa.ar.pl.power.df <- read.csv(file.path(data.path, "gratitude_power-analysis_dataset_sim_date_20180306_with_email.csv"))
 fa.power.df <- subset(fa.ar.pl.power.df, lang=="fa")
 ar.power.df <- subset(fa.ar.pl.power.df, lang=="ar")
-pl.power.df <- subset(subset(fa.ar.pl.power.df, lang=="fa"))
+pl.power.df <- subset(subset(fa.ar.pl.power.df, lang=="pl"))
 
 simulated.treatment.date <- as.Date("20180306", "%Y%M%D")
 
-subset.and.review.variables <- function(df.to.review){
+## THIS FUNCTION REMOVES OUTLIERS IN LABOR HOURS OUTSIDE THE 99% CONFIDENCE INTERVAL
+subset.and.review.variables <- function(df.to.review, remove_outliers = TRUE){
     print(      "========================")
     print(paste("Review Variables For:", unique(df.to.review$lang)))
     print(      "========================")
@@ -308,7 +309,24 @@ subset.and.review.variables <- function(df.to.review){
     df.to.review <- subset(df.to.review, num_edits_90_pre_treatment > 0 )
     print(paste("Number of rows after removing inactive users:", nrow(df.to.review)))
     cat("\n")
+
+    if("num_goodfaith_pre_treatment" %in% colnames(df.to.review)){
+        df.to.review <- subset(df.to.review, num_goodfaith_pre_treatment>=4)
+    }else{
+        df.to.review <- subset(df.to.review, num_flagged_revisions_pre_treatment>=4)
+        
+    }
+    print(paste("Number of rows after removing users without enough goodfaith edits:", nrow(df.to.review)))
+    cat("\n")
     
+    ## subset all observations less than or equal to the 99% confidence intervals
+#    if(remove.outliers){
+        mean.lh <- mean(df.to.review$labour_hours_90_pre_treatment)
+        sd.lh   <- sd(df.to.review$labour_hours_90_pre_treatment)
+        df.to.review <- subset(df.to.review, labour_hours_90_pre_treatment <= mean.lh + 2.58 * sd.lh)
+#     }
+    print(paste("Number of rows after removing outliers on labor hours:", nrow(df.to.review)))
+    cat("\n")
     
     print("prev_experience")
     print(summary(factor(df.to.review$prev_experience)))
@@ -391,6 +409,9 @@ pl.power.sub.df <- subset.and.review.variables(pl.power.df)
 
 survival.tables <- read.csv("fa.ar.pl.de.20180306.survival.tables.csv")
 
+## LOAD RETENTION INFORMATION
+account.period.df <- read.csv("fa.ar.pl.de.20180306.account.periods.csv")
+
 # Method: apply.experience.labor.hours
 #
 #`@ref.power.df THe reference dataframe
@@ -406,8 +427,8 @@ apply.experience.labor.hours <- function(ref.power.df, config.df){
 }
 
 pa.config.newcomer <- data.frame(
-    n.max    = 2000, # max number of observations
-    n.min    = 150, # min number of observations
+    n.max    = 3000, # max number of observations
+    n.min    = 500, # min number of observations
     
     survey.week.interval = 2, 
     # simulated survey completion rate of all those
@@ -432,16 +453,17 @@ pa.config.newcomer <- data.frame(
     thanks.given.90.day.treat.theta = 0.2,
     thanks.given.90.day.treat.mu = 0.1,
     thanks.given.90.day.estimand = mean(rnbinom(10000, 0.2, mu = 0.1)),
+
+    ## EFFECT ON ACTIVE STATUS
+    ## This is the probability of continuing to be an editor of Wikipedia 
+    ## after 4 weeks, where activity is defined as whether the account
+    ## had made any edits in the three week period following the Nth week
+    ## as defined in survival-analysis-of-power-analysis-dataset-R
     
-    # QUESTIONS FOR SURVIVAL
-    # These assumptions are based on the analysis in survival-analysis-of-power-analysis-dataset-R.ipynb
-    # ASSUMPTION: THE EFFECT IS NOT CUMULATIVE; NO EFFECT ON THE SLOPE
-    # ASSUMPTION: THE EFFECT ON RETENTION IS GREATER FOR LESS EXPERIENCED WIKIPEDIANS
-    # ASSUMPTION: THE RELATIONSHIP BETWEEN EFFECT AND RETENTION IS CURVED/ASYMPTOTIC TO A MINIMUM EFFECT
-    
-    # we want to be able to observe at least a 1 percentage point increase in survival
-    # for treated participants (knowing that not everyone will get treated)
-    # survival.effect = 1.01,
+    active.4.control.mean = NA,
+    active.4.treat.effect = NA,
+    active.2.control.mean = NA,
+    active.2.treat.effect = NA,
     
     ## SELF-EFFICACY (-3 to 3)
     # We don't expect an effect but we want to see an effect
@@ -472,8 +494,8 @@ pa.config.newcomer <- data.frame(
 )
 
 pa.config.experienced <- data.frame(
-    n.max    = 6000, # max number of observations per group
-    n.min    = 100, # min number of observations per group (multiple experience groups)
+    n.max    = 500, # max number of observations per group
+    n.min    = 150, # min number of observations per group (multiple experience groups)
     # iterate by 40?
     
     survey.week.interval = 2, 
@@ -498,15 +520,16 @@ pa.config.experienced <- data.frame(
     thanks.given.90.day.treat.mu = 0.1,
     thanks.given.90.day.estimand = mean(rnbinom(10000, 0.2, mu = 0.1)),
     
-    # QUESTIONS FOR SURVIVAL
-    # 
-    # ASSUMPTION: THE EFFECT IS NOT CUMULATIVE; NO EFFECT ON THE SLOPE
-    # ASSUMPTION: THE EFFECT ON RETENTION IS GREATER FOR LESS EXPERIENCED WIKIPEDIANS
-    # ASSUMPTION: THE RELATIONSHIP BETWEEN EFFECT AND RETENTION IS CURVED/ASYMPTOTIC TO A MINIMUM EFFECT
+    ## EFFECT ON ACTIVE STATUS
+    ## This is the probability of continuing to be an editor of Wikipedia 
+    ## after 4 weeks, where activity is defined as whether the account
+    ## had made any edits in the three week period following the Nth week
+    ## as defined in survival-analysis-of-power-analysis-dataset-R
     
-    # we want to be able to observe at least a 1 percentage point increase in survival
-    # for treated participants (knowing that not everyone will get treated)
-    # survival.effect = 1.01,
+    active.4.control.mean = NA,
+    active.4.treat.effect = NA,
+    active.2.control.mean = NA,
+    active.2.treat.effect = NA,
     
     ## SELF-EFFICACY (-3 to 3)
     # We don't expect an effect but we want to see an effect
@@ -612,7 +635,8 @@ diagnose.experiment <- function(sample.size.per.group, ref.df, pa.config,
                                                   n.tr = 2,
                                                   id.vars="id",
                                                   groups="prev_experience",
-                                                  block.vars = c("labor_hours_90_pre_treatment", "num_prev_thanks_pre_treatment"),
+#                                                  block.vars = c("labor_hours_90_pre_treatment", "num_prev_thanks_pre_treatment"),
+                                                  block.vars = c("num_prev_thanks_pre_treatment"),
                                                   distance ="mahalanobis"
                                                   ),
                                        data=d.df,
@@ -621,7 +645,8 @@ diagnose.experiment <- function(sample.size.per.group, ref.df, pa.config,
         d.df$blocks <- createBlockIDs(obj = block(data=d.df,
                                                   n.tr = 2,
                                                   id.vars="id",
-                                                  block.vars = c("labor_hours_90_pre_treatment", "num_prev_thanks_pre_treatment"),
+                                                  #block.vars = c("labor_hours_90_pre_treatment", "num_prev_thanks_pre_treatment"),
+                                                  block.vars = c("num_prev_thanks_pre_treatment"),
                                                   distance ="mahalanobis"
                                                   ),
                                        data=d.df,
@@ -671,13 +696,17 @@ diagnose.experiment <- function(sample.size.per.group, ref.df, pa.config,
                                   breaks = c(2, 3, 4, 5, 6)),
 
             ## Survey socialvalue will be a continuous index
-            SSV_Z_0 = rnorm(nrow(d.df), 
-                                          pa.config$survey.socialvalue.placebo.mean, 
-                                          pa.config$survey.socialvalue.placebo.sd),
-            SSV_Z_1 = rnorm(nrow(d.df), 
-                                          pa.config$survey.socialvalue.placebo.mean +
-                                          pa.config$survey.socialvalue.treat.effect, 
-                                          pa.config$survey.socialvalue.placebo.sd),
+#            SSV_Z_0 = rnorm(nrow(d.df), 
+#                                          pa.config$survey.socialvalue.placebo.mean, 
+#                                          pa.config$survey.socialvalue.placebo.sd),
+#            SSV_Z_1 = rnorm(nrow(d.df), 
+#                                          pa.config$survey.socialvalue.placebo.mean +
+#                                          pa.config$survey.socialvalue.treat.effect, 
+#                                          pa.config$survey.socialvalue.placebo.sd),
+            A2_Z_0 = rbinom(n = nrow(d.df), size = 1, prob = pa.config$active.2.control.mean), 
+            A2_Z_1 = rbinom(n = nrow(d.df), size = 1, prob = pa.config$active.2.control.mean + pa.config$active.2.treat.effect), 
+            A4_Z_0 = rbinom(n = nrow(d.df), size = 1, prob = pa.config$active.4.control.mean), 
+            A4_Z_1 = rbinom(n = nrow(d.df), size = 1, prob = pa.config$active.4.control.mean + pa.config$active.4.treat.effect), 
 
             ## labor hour difference
             LHD_Z_0 = labor_hours_90_post_treatment - labor_hours_90_pre_treatment,
@@ -693,10 +722,12 @@ diagnose.experiment <- function(sample.size.per.group, ref.df, pa.config,
         declare_assignment(prob = .5, blocks = blocks) +
         declare_estimand(ate_SE_1_0 = pa.config$survey.efficacy.treat.effect,
                          ate_SC_1_0 = pa.config$survey.closeness.treat.effect,
-                         ate_SSV_1_0 = pa.config$survey.socialvalue.treat.effect,
+                         ate_A2_1_0 = pa.config$active.2.treat.effect,
+                         ate_A4_1_0 = pa.config$active.4.treat.effect,
+#                         ate_SSV_1_0 = pa.config$survey.socialvalue.treat.effect,
                          ate_LHD_1_0 = pa.config$labor.hour.diff.90.day.treat.mean.effect,
                          ate_TG_1_0  = pa.config$thanks.given.90.day.estimand) +
-        declare_reveal(outcome_variables = c("SE", "SC", "SSV", "LHD", "TG"), assignment_variables=c("Z")) +
+        declare_reveal(outcome_variables = c("SE", "SC", "LHD", "TG", "A2", "A4"), assignment_variables=c("Z")) +
 
         # in survey estimators, we include all that participated in the survey 
         declare_estimator(formula = SE ~ Z,  
@@ -711,17 +742,29 @@ diagnose.experiment <- function(sample.size.per.group, ref.df, pa.config,
             estimand = "ate_SC_1_0", 
             label    = "estimate-S_Closeness_1_0-participated") +
     
-        declare_estimator(formula = SSV ~ Z,  
-            model    = difference_in_means,
-            subset   = survey.participation == 1, 
-            estimand = "ate_SSV_1_0", 
-            label    = "estimate-S_SocialValue_1_0-participated") +
+#        declare_estimator(formula = SSV ~ Z,  
+#            model    = difference_in_means,
+#            subset   = survey.participation == 1, 
+#            estimand = "ate_SSV_1_0", 
+#            label    = "estimate-S_SocialValue_1_0-participated") +
 
         declare_estimator(formula = LHD ~ Z,  
             model    = difference_in_means,
             blocks   = blocks,
             estimand = "ate_LHD_1_0", 
             label    = "estimate-LaborHoursDiff_1_0-blocked")  +
+
+        declare_estimator(formula = A2 ~ Z,  
+            model    = difference_in_means,
+            blocks   = blocks,
+            estimand = "ate_A2_1_0", 
+            label    = "estimate-Active-2wk_1_0-blocked")  +
+
+        declare_estimator(formula = A4 ~ Z,  
+            model    = difference_in_means,
+            blocks   = blocks,
+            estimand = "ate_A4_1_0", 
+            label    = "estimate-Active-4wk_1_0-blocked")  +
     
     ## for the power analysis, we only look at the effect among participants
     ## in blocks where no one had previously received thanks
@@ -739,25 +782,40 @@ diagnose.experiment <- function(sample.size.per.group, ref.df, pa.config,
    
     ## CONDUCT THE DIAGNOSIS
     diagnosis <- diagnose_design(design, sims = sims.count, 
-                                     bootstrap_sims = bootstrap.sims.count)
+                                 bootstrap_sims = bootstrap.sims.count,
+                                 diagnosands = declare_diagnosands(meanpvalue = mean(p.value), keep_defaults = TRUE))
     diagnosis
 }
 
+sim.lang.df <- eval(parse(text=paste(scriptlang, ".power.sub.df", sep="")))
+
 print(paste("Running newcomer Power Analysis for ", scriptlang, sep=""))
 pa.config.newcomer$pa.label <- paste(scriptlang, "-newcomer", sep="")
-newcomer.pa.results <- iterate.for.power(subset(de.power.sub.df, prev_experience==0),
+pa.config.newcomer$active.4.control.mean <- subset(survival.tables, lang==scriptlang & week == 4 & experience=="newcomer")$active
+pa.config.newcomer$active.4.treat.effect <- pa.config.newcomer$active.4.control.mean * 0.25
+pa.config.newcomer$active.2.control.mean <- subset(survival.tables, lang==scriptlang & week == 2 & experience=="newcomer")$active
+pa.config.newcomer$active.2.treat.effect <- pa.config.newcomer$active.2.control.mean * 0.25
+##pa.config.newcomer$inactive.control.mean <- mean(subset(account.period.df, lang==scriptlang & week==4 & prev_experience == 0 )$inactive)
+
+newcomer.pa.results <- iterate.for.power(subset(sim.lang.df, prev_experience==0),
                                          pa.config.newcomer, 
                                          survival.tables, scriptlang,
-                                         diagnose.experiment, 50) 
+                                         diagnose.experiment, 250) 
 write.csv(newcomer.pa.results, file=paste("data/thankee-power-analysis-newcomer-", pa.config.newcomer$pa.label, ".csv", sep=""))
+print(paste("outputting to", paste("data/thankee-power-analysis-newcomer-", pa.config.newcomer$pa.label, ".csv", sep="")))
 plot.power.results(newcomer.pa.results, pa.config.newcomer)
 
 
-print(paste("Running Experienced Power Analysis for ", scriptlang, sep=""))
-pa.config.experienced$pa.label <- "DE-experienced"
-experienced.pa.results <- iterate.for.power(subset(de.power.sub.df, prev_experience!=0),
-                                             pa.config.experienced, 
-                                             survival.tables, scriptlang,
-                                             diagnose.experiment, 300)
-write.csv(experienced.pa.results, file=paste("data/thankee-power-analysis-experienced-", pa.config.newcomer$pa.label, ".csv", sep=""))
-plot.power.results(experienced.pa.results, pa.config.experienced)
+#print(paste("Running Experienced Power Analysis for ", scriptlang, sep=""))
+#pa.config.experienced$pa.label <- paste(scriptlang, "-experienced", sep="")
+#pa.config.experienced$inactive.control.mean <- mean(subset(account.period.df, lang==scriptlang & week==4 & prev_experience >0 )$inactive)
+#pa.config.experienced$active.4.control.mean <- subset(survival.tables, lang==scriptlang & week == 4 & experience=="experienced")$active
+#pa.config.experienced$active.4.treat.effect <- pa.config.experienced$active.4.control.mean * 0.25
+#pa.config.experienced$active.2.control.mean <- subset(survival.tables, lang==scriptlang & week == 2 & experience=="experienced")$active
+#pa.config.experienced$active.2.treat.effect <- pa.config.experienced$active.2.control.mean * 0.25
+#experienced.pa.results <- iterate.for.power(subset(sim.lang.df, prev_experience!=0),
+#                                             pa.config.experienced, 
+#                                             survival.tables, scriptlang,
+#                                             diagnose.experiment, 100)
+#write.csv(experienced.pa.results, file=paste("data/thankee-power-analysis-experienced-", pa.config.experienced$pa.label, ".csv", sep=""))
+#plot.power.results(experienced.pa.results, pa.config.experienced)
